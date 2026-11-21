@@ -16,9 +16,14 @@ function show(label,text){const item=document.createElement('article'),title=doc
 document.querySelector('form').addEventListener('submit',async e=>{
  e.preventDefault();const input=el('prompt'),question=input.value.trim();if(!question||el('send').disabled)return;
  show('Você',question);input.value='';input.readOnly=true;el('send').disabled=true;el('send').textContent='Gerando…';el('status').textContent='Gerando resposta… A primeira pergunta pode demorar enquanto o modelo inicia.';
- try{const response=await fetch('/ia',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pergunta:question})});const raw=await response.text();let data;try{data=JSON.parse(raw);}catch(_){throw Error('Servidor retornou HTTP '+response.status+' sem JSON válido. Verifique os logs do Render.');}
- if(!response.ok||!data.resposta)throw Error(typeof data.detail==='string'?data.detail:('Servidor retornou HTTP '+response.status+'.'));
- show('Modelo',data.resposta);el('status').textContent='Resposta recebida.';el('history').lastElementChild.scrollIntoView({behavior:'smooth',block:'nearest'});
- }catch(err){show('Sistema','Não foi possível gerar a resposta: '+(err.message||String(err)));el('status').textContent='Falha na resposta. Você pode tentar novamente.';}finally{input.readOnly=false;el('send').disabled=false;el('send').textContent='Enviar pergunta';input.focus();}
+ try{
+ const item=document.createElement('article'),title=document.createElement('strong'),output=document.createElement('span');title.textContent='Modelo';item.className='model';item.append(title,output);el('history').append(item);
+ const response=await fetch('/ia/stream',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pergunta:question})});
+ if(!response.ok){let detail='HTTP '+response.status;try{const data=await response.json();detail=data.detail||detail;}catch(_){}throw Error(detail);}
+ if(!response.body)throw Error('Navegador não suporta respostas progressivas');
+ const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',finished=false,received=false;
+ while(true){const {value,done}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split('\\n');buffer=lines.pop();for(const line of lines){if(!line.trim())continue;const event=JSON.parse(line);if(event.error)throw Error(event.error);if(event.token){received=true;output.textContent+=event.token;el('status').textContent='Respondendo em tempo real…';}if(event.done){finished=true;el('status').textContent='Resposta concluída em '+(event.duration_ms/1000).toFixed(1)+'s.';}}}
+ if(!received||!finished)throw Error('Resposta interrompida');
+ }catch(err){show('Sistema','Falha: '+(err.message||String(err)));el('status').textContent='Não foi possível concluir a resposta.';}finally{input.readOnly=false;el('send').disabled=false;el('send').textContent='Enviar pergunta';input.focus();}
 });
 </script></html>
