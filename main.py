@@ -10,6 +10,7 @@ import base64
 import time
 import socket
 import threading
+import queue
 from collections import OrderedDict
 from fastapi.responses import Response
 from urllib import request, error
@@ -191,11 +192,14 @@ def gerar(payload: Prompt):
     raise HTTPException(503, "O modelo encerrou a geração sem completar a resposta.")
 
 
+_inference_slot = threading.BoundedSemaphore(1)
+
 @app.post("/ia/stream")
 def gerar_stream(payload: Prompt):
-    if not 1 <= len(payload.pergunta.strip()) <= 2000:
+    question = payload.pergunta.strip()
+    if not 1 <= len(question) <= 2000:
         raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
-    cached = cached_answer(payload.pergunta)
+    cached = cached_answer(question)
     if cached is not None:
         def replay():
             yield json.dumps({"token": cached}, ensure_ascii=False) + "\n"
@@ -205,39 +209,69 @@ def gerar_stream(payload: Prompt):
     url = os.getenv("OLLAMA_URL")
     if not url:
         raise HTTPException(503, "IA local desativada")
+    if not _inference_slot.acquire(blocking=False):
+        raise HTTPException(503, "Modelo ocupado. Aguarde a resposta anterior.")
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b-instruct-q3_K_S")
     body = {
         "model": model,
-        "system": "Você é um assistente técnico em português brasileiro. Responda corretamente, com clareza e objetividade. Para definições, dê uma frase precisa e um exemplo curto. Não atribua autoria ou origem histórica sem certeza. Não invente fatos. Se não souber, diga isso.",
-        "prompt": payload.pergunta.strip(),
+        "system": "Você é um assistente técnico em português brasileiro. Responda corretamente, com clareza e objetividade. Para definições, dê uma frase precisa e um exemplo curto. Não invente fatos; se não souber, diga isso.",
+        "prompt": question,
         "stream": True,
-        "keep_alive": "5m",
-        "options": {"num_predict": 96, "num_ctx": 768, "num_thread": 2, "num_batch": 32, "temperature": 0.15, "repeat_penalty": 1.12}
+        "keep_alive": "2m",
+        "options": {"num_predict": 80, "num_ctx": 512, "num_thread": 2,
+                    "num_batch": 32, "temperature": 0.15, "repeat_penalty": 1.12}
     }
-    def events():
-        started = time.monotonic()
+    events_queue = queue.Queue()
+    def worker():
         chunks = []
         try:
-            req = request.Request(url.rstrip("/") + "/api/generate", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
-            with request.urlopen(req, timeout=60) as response:
+            req = request.Request(url.rstrip("/") + "/api/generate",
+                                  data=json.dumps(body).encode(),
+                                  headers={"Content-Type": "application/json"})
+            with request.urlopen(req, timeout=40) as response:
                 for line in response:
-                    if time.monotonic() - started > 90:
-                        yield json.dumps({"error": "Tempo limite excedido"}) + "\n"
-                        return
+                    if not line.strip():
+                        continue
                     event = json.loads(line)
                     if event.get("error"):
-                        yield json.dumps({"error": "Falha na geração"}) + "\n"
+                        events_queue.put({"error": "Falha na geração do modelo"})
                         return
-                    if event.get("response"):
-                        chunks.append(event["response"])
-                        yield json.dumps({"token": event["response"]}, ensure_ascii=False) + "\n"
+                    token = event.get("response")
+                    if token:
+                        chunks.append(token)
+                        events_queue.put({"token": token})
                     if event.get("done"):
                         answer = "".join(chunks).strip()
                         if answer:
-                            save_answer(payload.pergunta, answer)
-                        yield json.dumps({"done": True, "duration_ms": round((time.monotonic()-started)*1000)}) + "\n"
+                            save_answer(question, answer)
+                        events_queue.put({"done": True})
                         return
+            events_queue.put({"error": "Modelo interrompeu a resposta"})
         except Exception:
-            logger.exception("Streaming inference failed")
-            yield json.dumps({"error": "Serviço de IA indisponível"}) + "\n"
-    return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+            logger.exception("Ollama streaming failed model=%s", model)
+            events_queue.put({"error": "Modelo indisponível ou tempo limite excedido"})
+        finally:
+            _inference_slot.release()
+
+    def events():
+        started = time.monotonic()
+        try:
+            threading.Thread(target=worker, daemon=True).start()
+        except Exception:
+            _inference_slot.release()
+            raise
+        yield json.dumps({"status": "starting"}) + "\n"
+        while time.monotonic() - started < 55:
+            try:
+                event = events_queue.get(timeout=5)
+            except queue.Empty:
+                yield json.dumps({"status": "waiting"}) + "\n"
+                continue
+            if event.get("done"):
+                event["duration_ms"] = round((time.monotonic() - started) * 1000)
+            yield json.dumps(event, ensure_ascii=False) + "\n"
+            if event.get("done") or event.get("error"):
+                return
+        yield json.dumps({"error": "Tempo máximo de resposta excedido"}) + "\n"
+    return StreamingResponse(events(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
