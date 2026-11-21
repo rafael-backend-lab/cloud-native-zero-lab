@@ -119,15 +119,31 @@ def gerar(payload: Prompt):
     url = os.getenv("OLLAMA_URL")
     if not url:
         raise HTTPException(503, "IA local desativada")
-    body = {"model": os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b"), "prompt": payload.pergunta, "stream": False,
-            "options": {"num_predict": 96, "num_ctx": 2048}}
+    model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")
+    options = {"num_predict": 96, "num_ctx": 2048}
+    if model == "smollm2:135m":
+        options.update(num_thread=1, num_predict=48, num_ctx=1024, num_batch=32)
+    body = {"model": model, "prompt": payload.pergunta, "stream": True, "options": options}
     req = request.Request(url + "/api/generate", data=json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"})
+    parts = []
     try:
-        with request.urlopen(req, timeout=120) as response:
-            result = json.load(response)
-        if not result.get("response", "").strip():
-            raise ValueError("Resposta vazia")
-        return {"resposta": result["response"]}
-    except (OSError, ValueError, error.URLError):
-        raise HTTPException(503, "Modelo local indisponível") from None
+        # O tempo limite vale para inatividade na leitura, inclusive ao carregar o modelo.
+        with request.urlopen(req, timeout=180) as response:
+            for line in response:
+                event = json.loads(line)
+                if "error" in event:
+                    raise ValueError("Falha durante a geração")
+                parts.append(event.get("response", ""))
+                if event.get("done"):
+                    answer = "".join(parts).strip()
+                    if answer:
+                        return {"resposta": answer}
+                    break
+    except TimeoutError:
+        raise HTTPException(504, "O modelo demorou demais para responder.") from None
+    except error.HTTPError as exc:
+        raise HTTPException(503, f"O serviço de IA retornou HTTP {exc.code}.") from None
+    except (OSError, ValueError):
+        raise HTTPException(503, "Falha de comunicação com o serviço de IA.") from None
+    raise HTTPException(503, "O modelo encerrou a geração sem completar a resposta.")

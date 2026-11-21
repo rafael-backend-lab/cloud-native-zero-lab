@@ -11,9 +11,9 @@ jobs:
       - run: docker build -f deploy/render.Dockerfile -t lab-render .
       - name: Inferência e tela com 512 MiB
         run: |
-          docker run -d -e LAB_ACCESS_PASSWORD=ci-only --name lab --memory=512m --memory-swap=512m -p 127.0.0.1:8080:8000 lab-render
+          docker run -d -e LAB_ACCESS_PASSWORD=ci-only --name lab --cpus=0.1 --memory=512m --memory-swap=512m -p 127.0.0.1:8080:8000 lab-render
           curl -u rafael:ci-only --retry 30 --retry-all-errors --retry-delay 1 -fsS http://localhost:8080/chat | grep -F 'Enviar pergunta'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/messages)" = 401
-          curl -u rafael:ci-only -fsS --max-time 150 http://localhost:8080/ia -H 'Content-Type: application/json' -d '{"pergunta":"Diga olá."}' | jq -e '.resposta | strings | length > 0'
+          curl -u rafael:ci-only -fsS --max-time 240 http://localhost:8080/ia -H 'Content-Type: application/json' -d '{"pergunta":"O que é uma API? Responda em português, em uma frase."}' | jq -e '.resposta | strings | length > 0'
       - if: failure()
         run: docker logs lab || true
