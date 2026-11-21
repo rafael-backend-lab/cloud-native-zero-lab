@@ -123,10 +123,10 @@ def gerar(payload: Prompt):
     if not url:
         raise HTTPException(503, "IA local desativada")
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")
-    options = {"num_predict": 160, "num_ctx": 512, "num_thread": 1, "num_batch": 8}
+    options = {"num_predict": 220, "num_ctx": 1024, "num_thread": 1, "num_batch": 8, "temperature": 0.25, "top_p": 0.85, "repeat_penalty": 1.15}
     if model == "smollm2:135m":
         options.update(num_thread=1, num_predict=48, num_ctx=1024, num_batch=32)
-    body = {"model": model, "system": "Responda sempre em português brasileiro claro, correto e direto. Se não souber, diga que não sabe. Não invente fatos.", "prompt": payload.pergunta, "stream": True, "keep_alive": 0, "options": options}
+    body = {"model": model, "system": "Você é o assistente técnico do Cloud Native Zero Lab. Responda exclusivamente em português brasileiro natural, com frases curtas e gramática correta. Vá direto à resposta. Explique termos técnicos com precisão e exemplos breves quando forem úteis. Evite repetir a pergunta, redundâncias, traduções literais e palavras inventadas. Não repita a mesma ideia. Se não souber, diga que não sabe. Não invente informações.", "prompt": payload.pergunta, "stream": True, "keep_alive": 0, "options": options}
     req = request.Request(url + "/api/generate", data=json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"})
     parts = []
