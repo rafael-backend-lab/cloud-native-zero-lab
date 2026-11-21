@@ -7,6 +7,8 @@ import json
 import logging
 import secrets
 import base64
+import time
+import socket
 from fastapi.responses import Response
 from urllib import request, error
 import pg8000
@@ -130,10 +132,16 @@ def gerar(payload: Prompt):
     req = request.Request(url + "/api/generate", data=json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"})
     parts = []
+    started = time.monotonic()
+    # Limite total menor que o timeout típico de gateways HTTP.
+    deadline = started + 75
+    logger.info("Ollama generation started model=%s", model)
     try:
         # O tempo limite vale para inatividade na leitura, inclusive ao carregar o modelo.
-        with request.urlopen(req, timeout=180) as response:
+        with request.urlopen(req, timeout=65) as response:
             for line in response:
+                if time.monotonic() > deadline:
+                    raise TimeoutError("Generation exceeded total deadline")
                 event = json.loads(line)
                 if "error" in event:
                     raise ValueError("Falha durante a geração")
@@ -141,15 +149,17 @@ def gerar(payload: Prompt):
                 if event.get("done"):
                     answer = "".join(parts).strip()
                     if answer:
+                        logger.info("Ollama generation completed model=%s duration=%.1fs", model, time.monotonic()-started)
                         return {"resposta": answer}
                     break
-    except TimeoutError:
-        logger.exception("Ollama timeout")
+    except (TimeoutError, socket.timeout):
+        logger.exception("Ollama timeout model=%s elapsed=%.1fs", model, time.monotonic()-started)
         raise HTTPException(504, "O modelo demorou demais para responder.") from None
     except error.HTTPError as exc:
-        logger.exception("Ollama HTTP %s", exc.code)
+        logger.exception("Ollama HTTP %s model=%s elapsed=%.1fs", exc.code, model, time.monotonic()-started)
         raise HTTPException(503, f"O serviço de IA retornou HTTP {exc.code}.") from None
     except (OSError, ValueError):
-        logger.exception("Ollama communication/generation failure")
+        logger.exception("Ollama communication/generation failure model=%s elapsed=%.1fs", model, time.monotonic()-started)
         raise HTTPException(503, "Falha de comunicação com o serviço de IA.") from None
+    logger.error("Ollama incomplete generation model=%s elapsed=%.1fs", model, time.monotonic()-started)
     raise HTTPException(503, "O modelo encerrou a geração sem completar a resposta.")
