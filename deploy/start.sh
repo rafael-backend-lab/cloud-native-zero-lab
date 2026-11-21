@@ -5,9 +5,9 @@ export OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1:11434}"
 export OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
 export OLLAMA_NUM_PARALLEL=1
 export OLLAMA_MAX_LOADED_MODELS=1
-export OLLAMA_KEEP_ALIVE=5m
-export GOMEMLIMIT="${GOMEMLIMIT:-280MiB}"
-export GOGC="${GOGC:-50}"
+export OLLAMA_KEEP_ALIVE=0
+export GOMEMLIMIT="${GOMEMLIMIT:-120MiB}"
+export GOGC="${GOGC:-30}"
 ollama serve &
 model_pid=$!
 api_pid=""
