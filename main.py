@@ -120,10 +120,10 @@ def gerar(payload: Prompt):
     if not url:
         raise HTTPException(503, "IA local desativada")
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")
-    options = {"num_predict": 96, "num_ctx": 2048}
+    options = {"num_predict": 160, "num_ctx": 512, "num_thread": 1, "num_batch": 8}
     if model == "smollm2:135m":
         options.update(num_thread=1, num_predict=48, num_ctx=1024, num_batch=32)
-    body = {"model": model, "prompt": payload.pergunta, "stream": True, "options": options}
+    body = {"model": model, "system": "Responda sempre em português brasileiro claro, correto e direto. Se não souber, diga que não sabe. Não invente fatos.", "prompt": payload.pergunta, "stream": True, "keep_alive": 0, "options": options}
     req = request.Request(url + "/api/generate", data=json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"})
     parts = []
