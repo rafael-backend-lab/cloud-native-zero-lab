@@ -9,6 +9,10 @@ services:
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-20b
       - key: NEON_DB_PASSWORD
         sync: false
       - key: LAB_ACCESS_PASSWORD
