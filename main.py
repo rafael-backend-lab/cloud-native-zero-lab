@@ -1,6 +1,6 @@
 """Cloud Native Zero Lab - FastAPI + Neon, compatible with a-Shell."""
 from pathlib import Path
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 import os
 import ssl
 import json
@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("uvicorn.error")
 
-app = FastAPI(title="Cloud Native Zero Lab", version="0.3.0")
+app = FastAPI(title="Cloud Native Zero Lab", version="0.4.0")
 
 @app.middleware("http")
 async def acesso_pessoal(req, call_next):
@@ -125,7 +125,7 @@ def gerar(payload: Prompt):
     if not url:
         raise HTTPException(503, "IA local desativada")
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")
-    options = {"num_predict": 220, "num_ctx": 1024, "num_thread": 1, "num_batch": 8, "temperature": 0.25, "top_p": 0.85, "repeat_penalty": 1.15}
+    options = {"num_predict": 120, "num_ctx": 768, "num_thread": 2, "num_batch": 32, "temperature": 0.25, "top_p": 0.85, "repeat_penalty": 1.15}
     if model == "smollm2:135m":
         options.update(num_thread=1, num_predict=48, num_ctx=1024, num_batch=32)
     body = {"model": model, "system": "Você é o assistente técnico do Cloud Native Zero Lab. Responda exclusivamente em português brasileiro natural, com frases curtas e gramática correta. Vá direto à resposta. Explique termos técnicos com precisão e exemplos breves quando forem úteis. Evite repetir a pergunta, redundâncias, traduções literais e palavras inventadas. Não repita a mesma ideia. Se não souber, diga que não sabe. Não invente informações.", "prompt": payload.pergunta, "stream": True, "keep_alive": "2m", "options": options}
@@ -163,3 +163,43 @@ def gerar(payload: Prompt):
         raise HTTPException(503, "Falha de comunicação com o serviço de IA.") from None
     logger.error("Ollama incomplete generation model=%s elapsed=%.1fs", model, time.monotonic()-started)
     raise HTTPException(503, "O modelo encerrou a geração sem completar a resposta.")
+
+
+@app.post("/ia/stream")
+def gerar_stream(payload: Prompt):
+    if not 1 <= len(payload.pergunta.strip()) <= 2000:
+        raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
+    url = os.getenv("OLLAMA_URL")
+    if not url:
+        raise HTTPException(503, "IA local desativada")
+    model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b-instruct-q3_K_S")
+    body = {
+        "model": model,
+        "system": "Responda em português brasileiro, diretamente, com precisão e clareza. Seja breve, exceto quando a pergunta exigir detalhes. Não invente fatos.",
+        "prompt": payload.pergunta.strip(),
+        "stream": True,
+        "keep_alive": "5m",
+        "options": {"num_predict": 120, "num_ctx": 768, "num_thread": 2, "num_batch": 32, "temperature": 0.25}
+    }
+    def events():
+        started = time.monotonic()
+        try:
+            req = request.Request(url.rstrip("/") + "/api/generate", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+            with request.urlopen(req, timeout=60) as response:
+                for line in response:
+                    if time.monotonic() - started > 90:
+                        yield json.dumps({"error": "Tempo limite excedido"}) + "\n"
+                        return
+                    event = json.loads(line)
+                    if event.get("error"):
+                        yield json.dumps({"error": "Falha na geração"}) + "\n"
+                        return
+                    if event.get("response"):
+                        yield json.dumps({"token": event["response"]}, ensure_ascii=False) + "\n"
+                    if event.get("done"):
+                        yield json.dumps({"done": True, "duration_ms": round((time.monotonic()-started)*1000)}) + "\n"
+                        return
+        except Exception:
+            logger.exception("Streaming inference failed")
+            yield json.dumps({"error": "Serviço de IA indisponível"}) + "\n"
+    return StreamingResponse(events(), media_type="application/x-ndjson", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
