@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger("uvicorn.error")
 
-app = FastAPI(title="Cloud Native Zero Lab", version="0.2.0")
+app = FastAPI(title="Cloud Native Zero Lab", version="0.3.0")
 
 @app.middleware("http")
 async def acesso_pessoal(req, call_next):
@@ -128,8 +128,8 @@ def gerar(payload: Prompt):
     options = {"num_predict": 220, "num_ctx": 1024, "num_thread": 1, "num_batch": 8, "temperature": 0.25, "top_p": 0.85, "repeat_penalty": 1.15}
     if model == "smollm2:135m":
         options.update(num_thread=1, num_predict=48, num_ctx=1024, num_batch=32)
-    body = {"model": model, "system": "Você é o assistente técnico do Cloud Native Zero Lab. Responda exclusivamente em português brasileiro natural, com frases curtas e gramática correta. Vá direto à resposta. Explique termos técnicos com precisão e exemplos breves quando forem úteis. Evite repetir a pergunta, redundâncias, traduções literais e palavras inventadas. Não repita a mesma ideia. Se não souber, diga que não sabe. Não invente informações.", "prompt": payload.pergunta, "stream": True, "keep_alive": 0, "options": options}
-    req = request.Request(url + "/api/generate", data=json.dumps(body).encode(),
+    body = {"model": model, "system": "Você é o assistente técnico do Cloud Native Zero Lab. Responda exclusivamente em português brasileiro natural, com frases curtas e gramática correta. Vá direto à resposta. Explique termos técnicos com precisão e exemplos breves quando forem úteis. Evite repetir a pergunta, redundâncias, traduções literais e palavras inventadas. Não repita a mesma ideia. Se não souber, diga que não sabe. Não invente informações.", "prompt": payload.pergunta, "stream": True, "keep_alive": "2m", "options": options}
+    req = request.Request(url.rstrip("/") + "/api/generate", data=json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"})
     parts = []
     started = time.monotonic()
@@ -158,7 +158,7 @@ def gerar(payload: Prompt):
     except error.HTTPError as exc:
         logger.exception("Ollama HTTP %s model=%s elapsed=%.1fs", exc.code, model, time.monotonic()-started)
         raise HTTPException(503, f"O serviço de IA retornou HTTP {exc.code}.") from None
-    except (OSError, ValueError):
+    except (OSError, ValueError, json.JSONDecodeError):
         logger.exception("Ollama communication/generation failure model=%s elapsed=%.1fs", model, time.monotonic()-started)
         raise HTTPException(503, "Falha de comunicação com o serviço de IA.") from None
     logger.error("Ollama incomplete generation model=%s elapsed=%.1fs", model, time.monotonic()-started)
