@@ -12,4 +12,15 @@ api messages | jq -e --argjson id "$id" 'any(.messages[]; .id==$id and .mensagem
 api ia -H 'Content-Type: application/json' -d '{"pergunta":"Quanto é dois mais dois?"}' | jq -e '.resposta | strings | length > 0'
 k get deployment api -o json | jq -e '.status.readyReplicas >= 2'
 # Mesmo namespace, sem o rótulo da API. DNS deve resolver antes da verificação da porta.
-k run "rede-$RANDOM" --image=busybox:1.36 --restart=Never --rm -i --command -- sh -ec 'for item in postgres:5432 ollama:11434; do h=${item%:*}; p=${item#*:}; nslookup "$h" >/dev/null; if nc -w 3 "$h" "$p" </dev/null; then exit 1; fi; done'
+k run "rede-$RANDOM" --image=zero-lab-api:local --image-pull-policy=Never --restart=Never --rm -i --command -- python -c '
+import socket
+for host, port in [("postgres", 5432), ("ollama", 11434)]:
+    address = socket.gethostbyname(host)
+    try:
+        conn = socket.create_connection((address, port), timeout=4)
+    except (TimeoutError, ConnectionRefusedError, ConnectionResetError):
+        print(host, "bloqueado", flush=True)
+    else:
+        conn.close()
+        raise SystemExit(f"Acesso inesperado a {host}")
+'
