@@ -62,12 +62,12 @@ def inicio():
 
 @app.get("/chat", include_in_schema=False)
 def conversa():
-    return FileResponse(Path(__file__).parent / "web" / "chat.html", media_type="text/html")
+    return FileResponse(Path(__file__).parent / "web" / "chat.html", media_type="text/html", headers={"Cache-Control": "no-store, max-age=0"})
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "release": "2026-11-21-fast"}
 
 
 @app.get("/dbstatus")
