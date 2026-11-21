@@ -1,6 +1,8 @@
 """Cloud Native Zero Lab - FastAPI + Neon, compatible with a-Shell."""
 import os
 import ssl
+import json
+from urllib import request, error
 import pg8000
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -18,7 +20,8 @@ def connect_db():
         raise HTTPException(status_code=503, detail="NEON_DB_PASSWORD nao configurada")
     try:
         host = os.getenv("PGHOST", HOST)
-        tls = False if host in {"127.0.0.1", "::1"} else ssl.create_default_context()
+        local_db = host == "postgres" and os.getenv("LAB_LOCAL_POSTGRES") == "1"
+        tls = False if local_db or host in {"127.0.0.1", "::1"} else ssl.create_default_context()
         return pg8000.connect(user=os.getenv("PGUSER", USER), password=password, host=host,
                               database=os.getenv("PGDATABASE", DATABASE), port=int(os.getenv("PGPORT", "5432")),
                               ssl_context=tls, timeout=15)
@@ -83,3 +86,27 @@ def create_message(payload: MessageIn):
         raise HTTPException(status_code=503, detail="Gravacao falhou") from None
     finally:
         conn.close()
+
+class Prompt(BaseModel):
+    pergunta: str
+
+
+@app.post("/ia")
+def gerar(payload: Prompt):
+    if not 1 <= len(payload.pergunta.strip()) <= 2000 or len(payload.pergunta) > 2000:
+        raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
+    url = os.getenv("OLLAMA_URL")
+    if not url:
+        raise HTTPException(503, "IA local desativada")
+    body = {"model": "qwen2.5:0.5b", "prompt": payload.pergunta, "stream": False,
+            "options": {"num_predict": 96, "num_ctx": 2048}}
+    req = request.Request(url + "/api/generate", data=json.dumps(body).encode(),
+                          headers={"Content-Type": "application/json"})
+    try:
+        with request.urlopen(req, timeout=120) as response:
+            result = json.load(response)
+        if not result.get("response", "").strip():
+            raise ValueError("Resposta vazia")
+        return {"resposta": result["response"]}
+    except (OSError, ValueError, error.URLError):
+        raise HTTPException(503, "Modelo local indisponível") from None

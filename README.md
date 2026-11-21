@@ -32,3 +32,25 @@ O GitHub Actions executa os testes a cada push ou pull request, usando um Postgr
 Para executar os testes locais, instale requirements-test.txt e rode python -m unittest discover -s tests -v. Para incluir a integração, use um PostgreSQL descartável em 127.0.0.1, banco lab_ci, e as variáveis do workflow.
 
 As rotas de mensagens do protótipo são abertas. Use apenas dados de demonstração caso publique o serviço.
+
+## Laboratório Kubernetes local
+
+O cluster k3d roda em Docker no computador ou no executor temporário do GitHub Actions. A entrada HTTPS escuta em 127.0.0.1:8443. A arquitetura fica assim:
+
+```mermaid
+flowchart TD
+  U["Cliente local"] -->|HTTPS| T[Traefik]
+  T --> S[Service da API]
+  S --> A[FastAPI]
+  S --> B[FastAPI]
+  A --> P[PostgreSQL]
+  B --> P
+  A --> O[Ollama]
+  B --> O
+```
+
+Kubernetes mantém duas réplicas da API e pode escalar até quatro conforme a utilização de CPU. PostgreSQL e Ollama têm serviços internos e políticas de rede que só aceitam conexões dos pods da API. A aplicação recebe um usuário de banco com permissão de leitura e inserção. O tráfego interno do PostgreSQL local usa TCP. A conexão externa com o Neon continua usando TLS.
+
+Com Docker, k3d, kubectl, openssl e jq disponíveis, execute `bash k8s/up.sh` e `bash k8s/check.sh`. O primeiro comando também baixa o modelo Qwen2.5 0.5B para inferência local em CPU. A documentação interativa fica em https://localhost:8443/docs, com certificado autoassinado. A rota POST /ia recebe o campo pergunta e devolve resposta. O segundo comando testa HTTPS, gravação, leitura, inferência e restrição de acesso aos serviços internos.
+
+O banco do cluster começa vazio e usa volume persistente durante a vida do cluster. O workflow sobe seu próprio cluster descartável. O perfil Render/Neon e a execução no iPhone continuam separados desta instalação. No perfil Render a IA local fica desativada.
