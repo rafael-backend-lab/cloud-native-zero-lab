@@ -4,6 +4,7 @@ from fastapi.responses import FileResponse
 import os
 import ssl
 import json
+import logging
 import secrets
 import base64
 from fastapi.responses import Response
@@ -11,6 +12,8 @@ from urllib import request, error
 import pg8000
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+logger = logging.getLogger("uvicorn.error")
 
 app = FastAPI(title="Cloud Native Zero Lab", version="0.2.0")
 
@@ -141,9 +144,12 @@ def gerar(payload: Prompt):
                         return {"resposta": answer}
                     break
     except TimeoutError:
+        logger.exception("Ollama timeout")
         raise HTTPException(504, "O modelo demorou demais para responder.") from None
     except error.HTTPError as exc:
+        logger.exception("Ollama HTTP %s", exc.code)
         raise HTTPException(503, f"O serviço de IA retornou HTTP {exc.code}.") from None
     except (OSError, ValueError):
+        logger.exception("Ollama communication/generation failure")
         raise HTTPException(503, "Falha de comunicação com o serviço de IA.") from None
     raise HTTPException(503, "O modelo encerrou a geração sem completar a resposta.")
