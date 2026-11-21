@@ -11,6 +11,8 @@ import time
 import socket
 import threading
 import queue
+import re
+import unicodedata
 from collections import OrderedDict
 from fastapi.responses import Response
 from urllib import request, error
@@ -116,6 +118,21 @@ def create_message(payload: MessageIn):
     finally:
         conn.close()
 
+# Respostas verificadas para perguntas frequentes, sem carregar o modelo.
+_FAST_ANSWERS = {
+    "o que e fastapi": "FastAPI é um framework Python para criar APIs HTTP, baseado em type hints. Usa Starlette para recursos web e Pydantic para validação de dados. Foi criado por Sebastián Ramírez. Exemplo: uma rota GET que retorna JSON.",
+    "o que e python": "Python é uma linguagem de programação de alto nível, usada em automação, desenvolvimento web, análise de dados e inteligência artificial.",
+    "o que e api": "API é uma interface que permite a comunicação entre sistemas. Uma API HTTP, por exemplo, pode receber uma requisição e devolver dados em JSON.",
+    "o que e docker": "Docker é uma plataforma para empacotar e executar aplicações em contêineres, com suas dependências e configurações.",
+    "o que e kubernetes": "Kubernetes é uma plataforma de orquestração de contêineres que automatiza implantação, escalabilidade e recuperação de aplicações.",
+}
+def fast_answer(question):
+    normalized = unicodedata.normalize("NFKD", question.casefold())
+    normalized = "".join(c for c in normalized if not unicodedata.combining(c))
+    normalized = re.sub(r"[^a-z0-9 ]", " ", normalized)
+    normalized = " ".join(normalized.split())
+    return _FAST_ANSWERS.get(normalized)
+
 _answer_cache = OrderedDict()
 _cache_lock = threading.Lock()
 _cache_limit = 64
@@ -144,7 +161,7 @@ class Prompt(BaseModel):
 def gerar(payload: Prompt):
     if not 1 <= len(payload.pergunta.strip()) <= 2000 or len(payload.pergunta) > 2000:
         raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
-    cached = cached_answer(payload.pergunta)
+    cached = fast_answer(payload.pergunta) or cached_answer(payload.pergunta)
     if cached is not None:
         return {"resposta": cached, "cached": True}
     url = os.getenv("OLLAMA_URL")
@@ -199,7 +216,7 @@ def gerar_stream(payload: Prompt):
     question = payload.pergunta.strip()
     if not 1 <= len(question) <= 2000:
         raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
-    cached = cached_answer(question)
+    cached = fast_answer(question) or cached_answer(question)
     if cached is not None:
         def replay():
             yield json.dumps({"token": cached}, ensure_ascii=False) + "\n"
@@ -217,8 +234,8 @@ def gerar_stream(payload: Prompt):
         "system": "Você é um assistente técnico em português brasileiro. Responda corretamente, com clareza e objetividade. Para definições, dê uma frase precisa e um exemplo curto. Não invente fatos; se não souber, diga isso.",
         "prompt": question,
         "stream": True,
-        "keep_alive": "2m",
-        "options": {"num_predict": 80, "num_ctx": 512, "num_thread": 2,
+        "keep_alive": "30s",
+        "options": {"num_predict": 48, "num_ctx": 384, "num_thread": 2,
                     "num_batch": 32, "temperature": 0.15, "repeat_penalty": 1.12}
     }
     events_queue = queue.Queue()
@@ -228,7 +245,7 @@ def gerar_stream(payload: Prompt):
             req = request.Request(url.rstrip("/") + "/api/generate",
                                   data=json.dumps(body).encode(),
                                   headers={"Content-Type": "application/json"})
-            with request.urlopen(req, timeout=40) as response:
+            with request.urlopen(req, timeout=24) as response:
                 for line in response:
                     if not line.strip():
                         continue
@@ -261,7 +278,7 @@ def gerar_stream(payload: Prompt):
             _inference_slot.release()
             raise
         yield json.dumps({"status": "starting"}) + "\n"
-        while time.monotonic() - started < 55:
+        while time.monotonic() - started < 30:
             try:
                 event = events_queue.get(timeout=5)
             except queue.Empty:
