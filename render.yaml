@@ -7,7 +7,7 @@ services:
     region: oregon
     branch: main
     healthCheckPath: /health
-    autoDeployTrigger: checksPass
+    autoDeployTrigger: commit
     envVars:
       - key: NEON_DB_PASSWORD
         sync: false
