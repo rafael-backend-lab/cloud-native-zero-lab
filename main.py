@@ -67,7 +67,7 @@ def conversa():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "release": "2026-11-21-fast"}
+    return {"status": "ok", "release": "external-ai-v1"}
 
 
 @app.get("/dbstatus")
@@ -118,177 +118,82 @@ def create_message(payload: MessageIn):
     finally:
         conn.close()
 
-# Respostas verificadas para perguntas frequentes, sem carregar o modelo.
-_FAST_ANSWERS = {
-    "o que e fastapi": "FastAPI é um framework Python para criar APIs HTTP, baseado em type hints. Usa Starlette para recursos web e Pydantic para validação de dados. Foi criado por Sebastián Ramírez. Exemplo: uma rota GET que retorna JSON.",
-    "o que e python": "Python é uma linguagem de programação de alto nível, usada em automação, desenvolvimento web, análise de dados e inteligência artificial.",
-    "o que e api": "API é uma interface que permite a comunicação entre sistemas. Uma API HTTP, por exemplo, pode receber uma requisição e devolver dados em JSON.",
-    "o que e docker": "Docker é uma plataforma para empacotar e executar aplicações em contêineres, com suas dependências e configurações.",
-    "o que e kubernetes": "Kubernetes é uma plataforma de orquestração de contêineres que automatiza implantação, escalabilidade e recuperação de aplicações.",
-}
-def fast_answer(question):
-    normalized = unicodedata.normalize("NFKD", question.casefold())
-    normalized = "".join(c for c in normalized if not unicodedata.combining(c))
-    normalized = re.sub(r"[^a-z0-9 ]", " ", normalized)
-    normalized = " ".join(normalized.split())
-    return _FAST_ANSWERS.get(normalized)
 
-_answer_cache = OrderedDict()
-_cache_lock = threading.Lock()
-_cache_limit = 64
-
-def cached_answer(question):
-    key = question.strip().casefold()
-    with _cache_lock:
-        answer = _answer_cache.get(key)
-        if answer is not None:
-            _answer_cache.move_to_end(key)
-        return answer
-
-def save_answer(question, answer):
-    key = question.strip().casefold()
-    with _cache_lock:
-        _answer_cache[key] = answer
-        _answer_cache.move_to_end(key)
-        if len(_answer_cache) > _cache_limit:
-            _answer_cache.popitem(last=False)
-
+# Inference happens outside Render; no local Ollama process is required.
+SYSTEM_PROMPT = ("Você é o assistente do Cloud Native Zero Lab. Responda em português "
+                 "brasileiro com precisão e clareza. Não invente informações; "
+                 "quando não souber, diga isso. Seja objetivo, mas completo.")
 class Prompt(BaseModel):
     pergunta: str
 
+def inference_config():
+    key = os.getenv("GROQ_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(503, "IA ainda não configurada: falta GROQ_API_KEY no servidor.")
+    return key, os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
+
+def ask_provider(question, streaming=False):
+    key, model = inference_config()
+    body = {"model": model, "messages": [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": question}
+    ], "temperature": 0.2, "max_tokens": 450, "stream": streaming}
+    return request.Request("https://api.groq.com/openai/v1/chat/completions",
+        data=json.dumps(body).encode("utf-8"), headers={
+            "Content-Type": "application/json", "Authorization": "Bearer " + key})
+
+@app.get("/ia/status")
+def ia_status():
+    return {"provider": "groq", "configured": bool(os.getenv("GROQ_API_KEY")),
+            "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")}
 
 @app.post("/ia")
 def gerar(payload: Prompt):
-    if not 1 <= len(payload.pergunta.strip()) <= 2000 or len(payload.pergunta) > 2000:
+    question = payload.pergunta.strip()
+    if not 1 <= len(question) <= 2000:
         raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
-    cached = fast_answer(payload.pergunta) or cached_answer(payload.pergunta)
-    if cached is not None:
-        return {"resposta": cached, "cached": True}
-    url = os.getenv("OLLAMA_URL")
-    if not url:
-        raise HTTPException(503, "IA local desativada")
-    model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b")
-    options = {"num_predict": 120, "num_ctx": 768, "num_thread": 2, "num_batch": 32, "temperature": 0.25, "top_p": 0.85, "repeat_penalty": 1.15}
-    if model == "smollm2:135m":
-        options.update(num_thread=1, num_predict=48, num_ctx=1024, num_batch=32)
-    body = {"model": model, "system": "Você é o assistente técnico do Cloud Native Zero Lab. Responda exclusivamente em português brasileiro natural, com frases curtas e gramática correta. Vá direto à resposta. Explique termos técnicos com precisão e exemplos breves quando forem úteis. Evite repetir a pergunta, redundâncias, traduções literais e palavras inventadas. Não repita a mesma ideia. Se não souber, diga que não sabe. Não invente informações.", "prompt": payload.pergunta, "stream": True, "keep_alive": "2m", "options": options}
-    req = request.Request(url.rstrip("/") + "/api/generate", data=json.dumps(body).encode(),
-                          headers={"Content-Type": "application/json"})
-    parts = []
-    started = time.monotonic()
-    # Limite total menor que o timeout típico de gateways HTTP.
-    deadline = started + 75
-    logger.info("Ollama generation started model=%s", model)
     try:
-        # O tempo limite vale para inatividade na leitura, inclusive ao carregar o modelo.
-        with request.urlopen(req, timeout=65) as response:
-            for line in response:
-                if time.monotonic() > deadline:
-                    raise TimeoutError("Generation exceeded total deadline")
-                event = json.loads(line)
-                if "error" in event:
-                    raise ValueError("Falha durante a geração")
-                parts.append(event.get("response", ""))
-                if event.get("done"):
-                    answer = "".join(parts).strip()
-                    if answer:
-                        logger.info("Ollama generation completed model=%s duration=%.1fs", model, time.monotonic()-started)
-                        save_answer(payload.pergunta, answer)
-                        return {"resposta": answer}
-                    break
-    except (TimeoutError, socket.timeout):
-        logger.exception("Ollama timeout model=%s elapsed=%.1fs", model, time.monotonic()-started)
-        raise HTTPException(504, "O modelo demorou demais para responder.") from None
+        with request.urlopen(ask_provider(question), timeout=25) as resp:
+            result = json.load(resp)
+        answer = result["choices"][0]["message"]["content"]
+        if not answer:
+            raise ValueError("Empty answer")
+        return {"resposta": answer}
     except error.HTTPError as exc:
-        logger.exception("Ollama HTTP %s model=%s elapsed=%.1fs", exc.code, model, time.monotonic()-started)
-        raise HTTPException(503, f"O serviço de IA retornou HTTP {exc.code}.") from None
-    except (OSError, ValueError, json.JSONDecodeError):
-        logger.exception("Ollama communication/generation failure model=%s elapsed=%.1fs", model, time.monotonic()-started)
-        raise HTTPException(503, "Falha de comunicação com o serviço de IA.") from None
-    logger.error("Ollama incomplete generation model=%s elapsed=%.1fs", model, time.monotonic()-started)
-    raise HTTPException(503, "O modelo encerrou a geração sem completar a resposta.")
-
-
-_inference_slot = threading.BoundedSemaphore(1)
+        logger.warning("Groq HTTP error: %s", exc.code)
+        raise HTTPException(503, "Provedor de IA indisponível ou limite de uso atingido.") from None
+    except (OSError, ValueError, KeyError, IndexError):
+        logger.exception("Groq request failed")
+        raise HTTPException(503, "Não foi possível obter resposta do provedor de IA.") from None
 
 @app.post("/ia/stream")
 def gerar_stream(payload: Prompt):
     question = payload.pergunta.strip()
     if not 1 <= len(question) <= 2000:
         raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
-    cached = fast_answer(question) or cached_answer(question)
-    if cached is not None:
-        def replay():
-            yield json.dumps({"token": cached}, ensure_ascii=False) + "\n"
-            yield json.dumps({"done": True, "duration_ms": 0, "cached": True}) + "\n"
-        return StreamingResponse(replay(), media_type="application/x-ndjson",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    url = os.getenv("OLLAMA_URL")
-    if not url:
-        raise HTTPException(503, "IA local desativada")
-    if not _inference_slot.acquire(blocking=False):
-        raise HTTPException(503, "Modelo ocupado. Aguarde a resposta anterior.")
-    model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b-instruct-q3_K_S")
-    body = {
-        "model": model,
-        "system": "Você é um assistente técnico em português brasileiro. Responda corretamente, com clareza e objetividade. Para definições, dê uma frase precisa e um exemplo curto. Não invente fatos; se não souber, diga isso.",
-        "prompt": question,
-        "stream": True,
-        "keep_alive": "30s",
-        "options": {"num_predict": 48, "num_ctx": 384, "num_thread": 2,
-                    "num_batch": 32, "temperature": 0.15, "repeat_penalty": 1.12}
-    }
-    events_queue = queue.Queue()
-    def worker():
-        chunks = []
-        try:
-            req = request.Request(url.rstrip("/") + "/api/generate",
-                                  data=json.dumps(body).encode(),
-                                  headers={"Content-Type": "application/json"})
-            with request.urlopen(req, timeout=24) as response:
-                for line in response:
-                    if not line.strip():
-                        continue
-                    event = json.loads(line)
-                    if event.get("error"):
-                        events_queue.put({"error": "Falha na geração do modelo"})
-                        return
-                    token = event.get("response")
-                    if token:
-                        chunks.append(token)
-                        events_queue.put({"token": token})
-                    if event.get("done"):
-                        answer = "".join(chunks).strip()
-                        if answer:
-                            save_answer(question, answer)
-                        events_queue.put({"done": True})
-                        return
-            events_queue.put({"error": "Modelo interrompeu a resposta"})
-        except Exception:
-            logger.exception("Ollama streaming failed model=%s", model)
-            events_queue.put({"error": "Modelo indisponível ou tempo limite excedido"})
-        finally:
-            _inference_slot.release()
-
+    req = ask_provider(question, streaming=True)
     def events():
         started = time.monotonic()
         try:
-            threading.Thread(target=worker, daemon=True).start()
+            with request.urlopen(req, timeout=25) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8").strip()
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[6:]
+                    if data == "[DONE]":
+                        yield json.dumps({"done": True, "duration_ms": round((time.monotonic()-started)*1000)}) + "\\n"
+                        return
+                    event = json.loads(data)
+                    token = event.get("choices", [{}])[0].get("delta", {}).get("content")
+                    if token:
+                        yield json.dumps({"token": token}, ensure_ascii=False) + "\\n"
+            yield json.dumps({"error": "Resposta interrompida pelo provedor"}) + "\\n"
+        except error.HTTPError as exc:
+            logger.warning("Groq stream HTTP %s", exc.code)
+            yield json.dumps({"error": "IA indisponível ou limite gratuito atingido"}) + "\\n"
         except Exception:
-            _inference_slot.release()
-            raise
-        yield json.dumps({"status": "starting"}) + "\n"
-        while time.monotonic() - started < 30:
-            try:
-                event = events_queue.get(timeout=5)
-            except queue.Empty:
-                yield json.dumps({"status": "waiting"}) + "\n"
-                continue
-            if event.get("done"):
-                event["duration_ms"] = round((time.monotonic() - started) * 1000)
-            yield json.dumps(event, ensure_ascii=False) + "\n"
-            if event.get("done") or event.get("error"):
-                return
-        yield json.dumps({"error": "Tempo máximo de resposta excedido"}) + "\n"
+            logger.exception("Groq streaming failed")
+            yield json.dumps({"error": "Falha de comunicação com a IA"}) + "\\n"
     return StreamingResponse(events(), media_type="application/x-ndjson",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
