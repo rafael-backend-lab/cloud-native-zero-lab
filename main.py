@@ -1,13 +1,29 @@
 """Cloud Native Zero Lab - FastAPI + Neon, compatible with a-Shell."""
+from pathlib import Path
+from fastapi.responses import FileResponse
 import os
 import ssl
 import json
+import secrets
+import base64
+from fastapi.responses import Response
 from urllib import request, error
 import pg8000
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 app = FastAPI(title="Cloud Native Zero Lab", version="0.2.0")
+
+@app.middleware("http")
+async def acesso_pessoal(req, call_next):
+    password = os.getenv("LAB_ACCESS_PASSWORD")
+    if password and req.url.path != "/health":
+        expected = b"Basic " + base64.b64encode(("rafael:" + password).encode())
+        provided = req.headers.get("authorization", "").encode()
+        if not secrets.compare_digest(provided, expected):
+            return Response(status_code=401, headers={"WWW-Authenticate": 'Basic realm="Zero Lab", charset="UTF-8"'})
+    return await call_next(req)
+
 
 HOST = "ep-muddy-sun-bfxcceif-pooler.c-5.us-west-2.aws.neon.tech"
 DATABASE = "cloud_native_zero_lab"
@@ -32,6 +48,11 @@ def connect_db():
 @app.get("/")
 def inicio():
     return {"projeto": "Cloud Native Zero Lab", "status": "online"}
+
+
+@app.get("/chat", include_in_schema=False)
+def conversa():
+    return FileResponse(Path(__file__).parent / "web" / "chat.html", media_type="text/html")
 
 
 @app.get("/health")
@@ -98,7 +119,7 @@ def gerar(payload: Prompt):
     url = os.getenv("OLLAMA_URL")
     if not url:
         raise HTTPException(503, "IA local desativada")
-    body = {"model": "qwen2.5:0.5b", "prompt": payload.pergunta, "stream": False,
+    body = {"model": os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b"), "prompt": payload.pergunta, "stream": False,
             "options": {"num_predict": 96, "num_ctx": 2048}}
     req = request.Request(url + "/api/generate", data=json.dumps(body).encode(),
                           headers={"Content-Type": "application/json"})

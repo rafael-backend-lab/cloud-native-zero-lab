@@ -1,14 +1,15 @@
 services:
   - type: web
     name: cloud-native-zero-lab
-    runtime: python
+    runtime: docker
+    dockerfilePath: ./deploy/render.Dockerfile
     plan: free
     region: oregon
     branch: main
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeployTrigger: checksPass
     envVars:
       - key: NEON_DB_PASSWORD
         sync: false
+      - key: LAB_ACCESS_PASSWORD
+        generateValue: true

@@ -6,6 +6,7 @@ trap 'rm -f "$cert"' EXIT
 k get secret entrada-tls -o 'jsonpath={.data.tls\.crt}' | openssl base64 -d -A > "$cert"
 api() { curl --silent --show-error --fail --cacert "$cert" "https://localhost:8443/$1" "${@:2}"; }
 for i in {1..60}; do if api dbstatus | jq -e '.user=="lab_api"' >/dev/null; then break; fi; sleep 2; done
+api chat | grep -F "Enviar pergunta"
 api dbstatus | jq -e '.database=="lab" and .user=="lab_api"'
 id=$(api messages -H 'Content-Type: application/json' -d '{"mensagem":"Teste HTTPS"}' | jq -er .id)
 api messages | jq -e --argjson id "$id" 'any(.messages[]; .id==$id and .mensagem=="Teste HTTPS")'

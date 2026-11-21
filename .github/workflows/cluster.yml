@@ -14,6 +14,7 @@ jobs:
           sudo install -m 755 /tmp/k3d /usr/local/bin/k3d
       - run: bash k8s/up.sh
       - run: bash k8s/check.sh
+      - run: bash k8s/check-scale.sh
       - name: Diagnóstico
         if: failure()
         run: kubectl --context k3d-zero-lab -n zero-lab get pods,events

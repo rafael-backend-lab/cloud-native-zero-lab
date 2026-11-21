@@ -53,4 +53,12 @@ Kubernetes mantém duas réplicas da API e pode escalar até quatro conforme a u
 
 Com Docker, k3d, kubectl, openssl e jq disponíveis, execute `bash k8s/up.sh` e `bash k8s/check.sh`. O primeiro comando também baixa o modelo Qwen2.5 0.5B para inferência local em CPU. A documentação interativa fica em https://localhost:8443/docs, com certificado autoassinado. A rota POST /ia recebe o campo pergunta e devolve resposta. O segundo comando testa HTTPS, gravação, leitura, inferência e restrição de acesso aos serviços internos.
 
-O banco do cluster começa vazio e usa volume persistente durante a vida do cluster. O workflow sobe seu próprio cluster descartável. O perfil Render/Neon e a execução no iPhone continuam separados desta instalação. No perfil Render a IA local fica desativada.
+O banco do cluster começa vazio e usa volume persistente durante a vida do cluster. O workflow sobe seu próprio cluster descartável. O perfil Render/Neon e a execução no iPhone continuam separados desta instalação.
+
+## Acesso pelo celular
+
+A interface em `/chat` envia cada pergunta para a API do mesmo serviço. O navegador exibe a resposta e mantém o histórico somente na aba. No cluster, ela utiliza Qwen2.5 0.5B. A configuração Docker para Render Free inclui um modelo menor, SmolLM2 135M, para caber na memória da instância. O banco do serviço Render continua sendo o Neon. O CI verifica a inferência com limite de memória e verifica o aumento de réplicas do Kubernetes sob carga de CPU.
+
+[Configurar a hospedagem Free no Render](https://render.com/deploy?repo=https://github.com/rafael-backend-lab/cloud-native-zero-lab)
+
+O Render gera LAB_ACCESS_PASSWORD. Entre com o usuário rafael e essa senha para usar a interface ou a API. A rota /health permanece acessível para a verificação do serviço.
