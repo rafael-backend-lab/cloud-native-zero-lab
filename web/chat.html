@@ -2,7 +2,7 @@
 <html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Conversa · Cloud Native Zero Lab</title>
 <style>
-:root{color-scheme:dark;font:17px/1.55 system-ui;background:#101815;color:#eef5ef}*{box-sizing:border-box}body{max-width:760px;margin:auto;padding:24px 18px;padding-bottom:48px}header{border-bottom:1px solid #496053;padding-bottom:16px}h1{font-size:clamp(26px,6vw,42px);margin:0}p{margin:.5rem 0}label,strong{display:block}article{padding:14px 0;border-bottom:1px solid #34453d;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}article strong{margin-bottom:6px}strong{color:#99dfba}form{margin:20px 0}textarea{background:#1c2923;color:inherit;border:1px solid #698274;border-radius:8px;padding:12px;width:100%;font:inherit}button{background:#b1e8bd;color:#142017;border:0;border-radius:8px;padding:10px 20px;font:inherit;font-weight:650}button:disabled{opacity:.5;cursor:wait}button:focus-visible,textarea:focus-visible{outline:2px solid #b1e8bd;outline-offset:3px}textarea{resize:vertical;min-height:110px}#status{display:block;margin-top:10px;overflow-wrap:anywhere;line-height:1.4}button{max-width:100%}footer{color:#c0cfc5;font-size:.9rem}a{color:#b1e8bd}
+:root{color-scheme:dark;font:17px/1.55 system-ui;background:#101815;color:#eef5ef}*{box-sizing:border-box}body{max-width:760px;margin:auto;padding:24px 18px;padding-bottom:48px}header{border-bottom:1px solid #496053;padding-bottom:16px}h1{font-size:clamp(26px,6vw,42px);margin:0}p{margin:.5rem 0}label,strong{display:block}article{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}article strong{margin-bottom:6px}strong{color:#99dfba}form{margin:20px 0}#history:empty{display:none}#history{display:flex;flex-direction:column;gap:12px;margin-top:20px}article{background:#1b2922;border:1px solid #344b3d;border-radius:14px;padding:14px 16px}article.user{align-self:flex-end;max-width:94%;background:#263c30}article.model{align-self:stretch}article strong{font-size:.85rem;letter-spacing:.03em}textarea{background:#1c2923;color:inherit;border:1px solid #698274;border-radius:8px;padding:12px;width:100%;font:inherit}button{background:#b1e8bd;color:#142017;border:0;border-radius:8px;padding:10px 20px;font:inherit;font-weight:650}button:disabled{opacity:.5;cursor:wait}button:focus-visible,textarea:focus-visible{outline:2px solid #b1e8bd;outline-offset:3px}textarea{resize:vertical;min-height:110px}#status{display:block;margin-top:10px;overflow-wrap:anywhere;line-height:1.4}button{max-width:100%;min-height:46px}#status:empty{display:none}@media(max-width:480px){body{padding:20px 14px 40px}h1{line-height:1.15}textarea{font-size:16px}article{padding:12px 14px}}footer{color:#c0cfc5;font-size:.9rem}a{color:#b1e8bd}
 </style>
 <header><h1>Cloud Native Zero Lab</h1><p>Converse com o modelo do laboratório.</p></header>
 <main><section id="history" aria-label="Perguntas e respostas"></section>
@@ -11,13 +11,13 @@
 <footer>Cada pergunta é independente. O histórico fica nesta aba. <a href="/docs">Documentação da API</a></footer>
 <script>
 const el=id=>document.getElementById(id);
-function show(label,text){const item=document.createElement('article'),title=document.createElement('strong');title.textContent=label;item.append(title,document.createTextNode(text));el('history').append(item);}
+function show(label,text){const item=document.createElement('article'),title=document.createElement('strong');title.textContent=label;item.className=label==="Você"?"user":"model";item.append(title,document.createTextNode(text));el('history').append(item);}
 document.querySelector('form').addEventListener('submit',async e=>{
  e.preventDefault();const input=el('prompt'),question=input.value.trim();if(!question||el('send').disabled)return;
  input.readOnly=true;el('send').disabled=true;el('send').textContent='Gerando…';el('status').textContent='Gerando resposta… A primeira pergunta pode demorar enquanto o modelo inicia.';
  try{const response=await fetch('/ia',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pergunta:question})});const raw=await response.text();let data;try{data=JSON.parse(raw);}catch(_){throw Error('Servidor retornou HTTP '+response.status+' sem JSON válido. Verifique os logs do Render.');}
  if(!response.ok||!data.resposta)throw Error(typeof data.detail==='string'?data.detail:('Servidor retornou HTTP '+response.status+'.'));
- show('Você',question);show('Modelo',data.resposta);input.value='';el('status').textContent='Resposta recebida.';
- }catch(err){el('status').textContent='Erro: '+(err.message||String(err))+'.';}finally{input.readOnly=false;el('send').disabled=false;el('send').textContent='Enviar pergunta';}
+ show('Você',question);show('Modelo',data.resposta);input.value='';el('status').textContent='Resposta recebida.';el('history').lastElementChild.scrollIntoView({behavior:'smooth',block:'nearest'});
+ }catch(err){el('status').textContent='Erro: '+(err.message||String(err))+'.';}finally{input.readOnly=false;el('send').disabled=false;el('send').textContent='Enviar pergunta';input.focus();}
 });
 </script></html>
