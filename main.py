@@ -9,6 +9,8 @@ import secrets
 import base64
 import time
 import socket
+import threading
+from collections import OrderedDict
 from fastapi.responses import Response
 from urllib import request, error
 import pg8000
@@ -113,6 +115,26 @@ def create_message(payload: MessageIn):
     finally:
         conn.close()
 
+_answer_cache = OrderedDict()
+_cache_lock = threading.Lock()
+_cache_limit = 64
+
+def cached_answer(question):
+    key = question.strip().casefold()
+    with _cache_lock:
+        answer = _answer_cache.get(key)
+        if answer is not None:
+            _answer_cache.move_to_end(key)
+        return answer
+
+def save_answer(question, answer):
+    key = question.strip().casefold()
+    with _cache_lock:
+        _answer_cache[key] = answer
+        _answer_cache.move_to_end(key)
+        if len(_answer_cache) > _cache_limit:
+            _answer_cache.popitem(last=False)
+
 class Prompt(BaseModel):
     pergunta: str
 
@@ -121,6 +143,9 @@ class Prompt(BaseModel):
 def gerar(payload: Prompt):
     if not 1 <= len(payload.pergunta.strip()) <= 2000 or len(payload.pergunta) > 2000:
         raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
+    cached = cached_answer(payload.pergunta)
+    if cached is not None:
+        return {"resposta": cached, "cached": True}
     url = os.getenv("OLLAMA_URL")
     if not url:
         raise HTTPException(503, "IA local desativada")
@@ -150,6 +175,7 @@ def gerar(payload: Prompt):
                     answer = "".join(parts).strip()
                     if answer:
                         logger.info("Ollama generation completed model=%s duration=%.1fs", model, time.monotonic()-started)
+                        save_answer(payload.pergunta, answer)
                         return {"resposta": answer}
                     break
     except (TimeoutError, socket.timeout):
@@ -169,20 +195,28 @@ def gerar(payload: Prompt):
 def gerar_stream(payload: Prompt):
     if not 1 <= len(payload.pergunta.strip()) <= 2000:
         raise HTTPException(422, "Pergunta deve ter entre 1 e 2000 caracteres")
+    cached = cached_answer(payload.pergunta)
+    if cached is not None:
+        def replay():
+            yield json.dumps({"token": cached}, ensure_ascii=False) + "\n"
+            yield json.dumps({"done": True, "duration_ms": 0, "cached": True}) + "\n"
+        return StreamingResponse(replay(), media_type="application/x-ndjson",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     url = os.getenv("OLLAMA_URL")
     if not url:
         raise HTTPException(503, "IA local desativada")
     model = os.getenv("OLLAMA_MODEL", "qwen2.5:0.5b-instruct-q3_K_S")
     body = {
         "model": model,
-        "system": "Responda em português brasileiro, diretamente, com precisão e clareza. Seja breve, exceto quando a pergunta exigir detalhes. Não invente fatos.",
+        "system": "Você é um assistente técnico em português brasileiro. Responda corretamente, com clareza e objetividade. Para definições, dê uma frase precisa e um exemplo curto. Não atribua autoria ou origem histórica sem certeza. Não invente fatos. Se não souber, diga isso.",
         "prompt": payload.pergunta.strip(),
         "stream": True,
         "keep_alive": "5m",
-        "options": {"num_predict": 120, "num_ctx": 768, "num_thread": 2, "num_batch": 32, "temperature": 0.25}
+        "options": {"num_predict": 96, "num_ctx": 768, "num_thread": 2, "num_batch": 32, "temperature": 0.15, "repeat_penalty": 1.12}
     }
     def events():
         started = time.monotonic()
+        chunks = []
         try:
             req = request.Request(url.rstrip("/") + "/api/generate", data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
             with request.urlopen(req, timeout=60) as response:
@@ -195,8 +229,12 @@ def gerar_stream(payload: Prompt):
                         yield json.dumps({"error": "Falha na geração"}) + "\n"
                         return
                     if event.get("response"):
+                        chunks.append(event["response"])
                         yield json.dumps({"token": event["response"]}, ensure_ascii=False) + "\n"
                     if event.get("done"):
+                        answer = "".join(chunks).strip()
+                        if answer:
+                            save_answer(payload.pergunta, answer)
                         yield json.dumps({"done": True, "duration_ms": round((time.monotonic()-started)*1000)}) + "\n"
                         return
         except Exception:
